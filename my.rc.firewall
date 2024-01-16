@@ -1,0 +1,174 @@
+#!/bin/bash
+IF_INT="eth0"
+IF_EXT="eth1"
+IPADDR="outdoor_ip_adress"
+IPINT="GW_addr/mask"
+LOCALNET="192.168.0.0/24"
+ROUTER=`/sbin/ifconfig|grep "inet addr"|awk -F" " -- '{print($2)}'|awk -F":" -- '{print($2)}'`
+LOOPBACK="127.0.0.1"
+IPT="/sbin/iptables"
+ECHO="/bin/echo"
+TRUSTED_HOSTS="192.168.0.1 192.168.0.2"
+MASQUERADE_HOSTS="192.168.0.9 192.168.0.2  192.168.0.7 192.168.0.4"
+IV_PORTS="21 20 25 53 110 119"
+IV_ICMP="echo-request"
+PUBLIC_PORTS="22 20 21 25 80 53 110 5002"
+PUBLIC_ICMP="echo-request"
+EXCL_LOCAL=""
+EXCL_DEST=""
+EXCL_PORT=""
+case "$1" in
+    'stop')
+#Clear all chains/tables
+        $IPT -F
+        $IPT -t nat -F;
+        $IPT -t mangle -F
+        $IPT -X TCP_FLAGS
+        $IPT -X ACCT
+        $IPT -X $IF_EXT
+        $IPT -P INPUT ACCEPT
+        $IPT -P FORWARD ACCEPT
+        $IPT -P OUTPUT ACCEPT
+	$IPT -A INPUT -p tcp --dport 22 -j ACCEPT
+        ;;
+
+    'start')
+#Turn up masquerade
+##############################
+#       $IPT -t nat -A POSTROUTING -s $LOCALNET -j MASQUERADE
+##############################
+
+
+##############################
+        $IPT -N ACCT
+        $IPT -A ACCT -j RETURN
+        $IPT -A ACCT -j RETURN
+        $IPT -A INPUT -i $IF_EXT -j ACCT
+        $IPT -A OUTPUT -o $IF_EXT -j ACCT
+        $IPT -P INPUT DROP
+        $IPT -P FORWARD DROP
+        $IPT -P OUTPUT ACCEPT
+	
+	
+
+$IPT -A INPUT -s 192.168.3.0/32 -j ACCEPT
+$IPT -A FORWARD -s 192.168.3.0/32 -j ACCEPT
+$IPT -A FORWARD -d 192.168.3.0/32 -j ACCEPT
+$IPT -A OUTPUT -d 192.168.3.0/32 -j ACCEPT
+
+$IPT -A INPUT -s 10.1.0.15/32 -j ACCEPT
+$IPT -A FORWARD -s 10.1.0.15/32 -j ACCEPT
+$IPT -A FORWARD -d 10.1.0.15/32 -j ACCEPT
+$IPT -A OUTPUT -d 10.1.0.15/32 -j ACCEPT
+
+$IPT -A INPUT -s 10.1.0.16/32 -j ACCEPT
+$IPT -A FORWARD -s 10.1.0.16/32 -j ACCEPT
+$IPT -A FORWARD -d 10.1.0.16/32 -j ACCEPT
+$IPT -A OUTPUT -s 10.1.0.1/32 -j ACCEPT	
+
+
+        for host in $ROUTER
+        do
+             $IPT -A INPUT -s $host -i lo -j ACCEPT
+        done
+
+# $IPFW -$CMD INPUT -i lo -j ACCEPT
+
+        for host in $TRUSTED_HOSTS
+        do
+            $IPT -A FORWARD -d $host -m state --state ESTABLISHED,RELATED -j ACCEPT
+            $IPT -t nat -A POSTROUTING -s $host -o $IF_EXT -j SNAT --to $IPADDR
+#         $IPT -t nat -A POSTROUTING -s $host -o $IF_EXT -j SNAT --to $IPADDR2
+            $IPT -A FORWARD -s $host -j ACCEPT
+        done
+
+        $IPT -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+        for host in $MASQUERADE_HOSTS
+        do
+            $IPT -t nat -A POSTROUTING -p icmp -s $host -o $IF_EXT -j SNAT --to $IPADDR
+#         $IPT -t nat -A POSTROUTING -p icmp -s $host -o $IF_EXT -j SNAT --to $IPADDR2
+            $IPT -A FORWARD -d $host -m state --state ESTABLISHED,RELATED -j ACCEPT
+            for port in $IV_PORTS
+            do
+                for proto in tcp udp
+                do
+                    $IPT -t nat -A POSTROUTING -p $proto -s $host -o $IF_EXT --dport $port -j SNAT --to $IPADDR
+#               $IPT -t nat -A POSTROUTING -p $proto -s $host -o $IF_EXT --dport $port -j SNAT --to $IPADDR2
+                done
+            done
+            $IPT -A FORWARD -s $host -j ACCEPT
+        done
+	
+        for host in $EXCL_LOCAL
+        do
+            for port in $EXCL_PORT
+            do
+                for proto in tcp udp
+                do
+                    for dest in $EXCL_DEST
+                    do
+		    
+                        $IPT -t nat -A POSTROUTING -p $proto -s $host -o $IF_EXT -d $dest --dport $port -j SNAT --to $IPADDR
+#                 $IPT -t nat -A POSTROUTING -p $proto -s $host -o $IF_EXT -d $dest --dport $port -j SNAT --to $IPADDR2
+                    done
+                done
+            done
+        done
+
+
+##############################
+
+
+
+#Turn up packet redirection to Squid
+#       $IPT -A INPUT -i eth1 -p tcp -s $LOCALNET -d $IPINT --sport 80 -j ACCEPT
+#       $IPT -t nat -A PREROUTING -p tcp -i eth1 -s $LOCALNET -d ! $LOCALNET --dport http -j REDIRECT --to $LOOPBACK --to-port 3128
+
+#Turn up packets redirection to frox
+#       $IPT -A INPUT -i eth1 -p tcp -s $LOCALNET -d $LOCALNET --sport 21 -j ACCEPT
+#       $IPT -t nat -A PREROUTING -i eth1 -p tcp -s $LOCALNET -d ! $LOCALNET --dport 21 -j REDIRECT --to 12345
+
+# Deny all ICMP packets
+#       $ECHO "1" > /proc/sys/net/ipv4/icmp_echo_ignore_all
+
+        $IPT -A INPUT -i $IF_EXT -s ! $LOCALNET -p icmp -j REJECT
+      $IPT -A INPUT -i $IF_EXT -s ! $LOCALNET -p tcp --dport 3128:3128 -j DROP
+        $IPT -N TCP_FLAGS
+        $IPT -F TCP_FLAGS
+        $IPT -A TCP_FLAGS -p tcp --tcp-flags ALL FIN,URG,PSH -j DROP
+        $IPT -A TCP_FLAGS -p tcp --tcp-flags SYN,RST SYN,RST -j DROP
+        $IPT -A TCP_FLAGS -p tcp --tcp-flags SYN,FIN SYN,FIN -j DROP
+        $IPT -A TCP_FLAGS -p tcp --tcp-option 64 -j DROP
+        $IPT -A TCP_FLAGS -p tcp --tcp-option 128 -j DROP
+        $IPT -A INPUT -i $IF_EXT -p tcp -j TCP_FLAGS
+# =D4=E8=ED=EA =F5=EF=E2=F4=E8=E3=EA
+        for port in $PUBLIC_PORTS
+        do
+            for proto in tcp udp
+            do
+            $IPT -A INPUT -p $proto --dport $port -j ACCEPT
+            done
+        done
+        for type in $PUBLIC_ICMP
+        do
+            $IPT -A INPUT -p icmp  --icmp-type $type -j ACCEPT
+        done
+# =CA =EA=FF=EF=E8=E6=F4=EA
+        $IPT -A INPUT -s $LOCALNET -j ACCEPT
+        $IPT -N $IF_EXT
+        $IPT -A $IF_EXT -m state --state ESTABLISHED,RELATED -j ACCEPT
+        $IPT -A $IF_EXT -m state --state NEW -i ! $IF_EXT -j ACCEPT
+        $IPT -A $IF_EXT -i $IF_EXT -m limit -j LOG --log-prefix "Bad packet from $IF_EXT:"
+        $IPT -A $IF_EXT -i ! $IF_EXT -m limit -j LOG --log-prefix "Bad packet not from $IF_EXT:"
+#$IPT -A $IF_EXT -j DROP
+        $IPT -A INPUT -j $IF_EXT
+        $IPT -A FORWARD -j $IF_EXT
+        ;;
+    'restart')
+        $0 stop && $0 start
+        ;;
+    *)
+        echo "usage $0 start|stop|restart"
+        ;;
+esac
+
