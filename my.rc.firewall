@@ -1,7 +1,7 @@
 #!/bin/bash
 IF_INT="eth0"
 IF_EXT="eth1"
-IPADDR="outdoor_ip_adress"
+IPADDR="inet_ip_adress"
 IPINT="GW_addr/mask"
 LOCALNET="192.168.0.0/24"
 ROUTER=`/sbin/ifconfig|grep "inet addr"|awk -F" " -- '{print($2)}'|awk -F":" -- '{print($2)}'`
